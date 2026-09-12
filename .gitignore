@@ -1,0 +1,65 @@
+# Remote sensing data blobs — never commit rasters to git.
+# Commit acquisition/preprocessing scripts and small derived tables instead.
+*.tif
+*.tiff
+*.img
+*.hdf
+*.he5
+*.nc
+*.nc4
+*.grib
+*.grb2
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.safe/
+*.SAFE/
+data/raw/
+data/interim/
+data/external/
+
+# Geospatial intermediates
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
+*.gpkg-shm
+*.gpkg-wal
+
+# Model artefacts
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.keras
+*.onnx
+*.pkl
+*.joblib
+checkpoints/
+runs/
+wandb/
+mlruns/
+lightning_logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+~$*.docx
+~$*.xlsx
