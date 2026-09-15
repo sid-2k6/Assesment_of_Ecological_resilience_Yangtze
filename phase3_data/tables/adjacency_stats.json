@@ -1,0 +1,15 @@
+{
+  "n_counties": 1068,
+  "n_edges": 3032,
+  "mean_degree": 5.677902621722846,
+  "median_degree": 6.0,
+  "min_degree": 1,
+  "max_degree": 12,
+  "density": 0.0053213707794965755,
+  "n_components": 1,
+  "largest_component": 1068,
+  "cross_reach_edges": 63,
+  "cross_province_edges": 287,
+  "epsilon_m": 50,
+  "k_fallback": 3
+}
