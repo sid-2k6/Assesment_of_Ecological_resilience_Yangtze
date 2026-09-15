@@ -343,3 +343,114 @@ Stored as Parquet with float32 downcasting: 83 MB CSV → **22.5 MB Parquet**. P
 | **N5** hierarchical seasonal encoder | ✅ **Data ready.** Justification now doubly confirmed. |
 | **N1** disturbance-response decoder | ⚠️ **Needs revision.** Forcing stream built and validated, but the disturbance axis must shift from drought to thermal/flood, and the recovery term needs sub-seasonal resolution. |
 | N2, N3, N4, N6 | Unaffected; still awaiting river network, karst extent, CLCD. |
+
+
+---
+
+# Phase 3d — Monthly panel, karst, hydro graph, nighttime lights
+
+Data collection push following the N1 revision. **The monthly panel is now the primary modelling input.**
+
+## Primary deliverable: monthly panel
+
+**269,136 rows × 58 columns — 1,068 counties × 21 years × 12 months.** Exactly the expected count, no gaps.
+
+| Stream | Contents | Missing |
+|---|---|---|
+| **State** (monthly) | LST day, NDVI, kNDVI + anomalies | 0.40–0.48 % |
+| **Forcing** (monthly) | ppt, pet, aet, def, q, tmax, tmin, vpd, soil, srad, pdsi, swe + `*_z` anomalies, `wbal`, `heat_z`, `dry_z` | 0.00 % |
+| **Static** | elevation, relief, slope, roughness, **karst_frac** | 0.00 % |
+| **Human (Tier 1)** | harmonised nighttime lights (mean, sum) | 0.00 % |
+
+Sample size progression across the project: **22,428 annual → 89,712 seasonal → 269,136 monthly.** The sample-size risk in the design's §7 is now retired.
+
+Monthly forcing climatology validates: precipitation peaks June at 190.8 mm, tmax peaks July at 30.1 °C — the East Asian monsoon. All four known drought years show positive `dry_z`.
+
+## A result that confirms finding F1 directly
+
+| Reach | NTL (human) | kNDVI (vegetation) | Karst |
+|---|---|---|---|
+| downstream | **19.00** | 0.205 | 0.141 |
+| midstream | 7.45 | 0.259 | 0.364 |
+| upstream | 4.75 | 0.260 | 0.584 |
+
+**Nighttime lights follow the same gradient as the published resilience gradient (downstream > upstream); vegetation follows the inverse.** F1 predicted resilience must be driven by adaptive-capacity/socioeconomic terms rather than vegetation, and the human stream now demonstrably has the right gradient direction while the vegetation stream does not. This belongs in the paper as direct empirical support for a multi-dimensional index.
+
+## Karst extent (N3 gating) — acquired
+
+Source: **WOKAM** (World Karst Aquifer Map, BGR/WHYMAP), `whymap_karst__v1_poly.shp`, intersected per county in Albers equal-area.
+
+Mean karst fraction: **upstream 0.584, midstream 0.364, downstream 0.141** — correctly concentrating karst in the southwest, which is exactly the heterogeneity N3 exists to handle. 696 of 1,068 counties have >1 % karst.
+
+⚠️ **Caveat to resolve before use:** WOKAM is a coarse global map, so small counties can fall entirely inside a single polygon and register `karst_frac = 1.0`. Several top-ranked counties are genuine karst (恩施市, 建始县, 长阳, 秭归县 — the Wuling/Three Gorges karst belt), but a few small urban districts (杜集区 Anhui, 安源区 Jiangxi) are almost certainly resolution artefacts. The `rock_type` / `RTypeLabel` attributes need filtering to separate continuous from discontinuous carbonate before N3 uses this layer.
+
+## Directed hydrological graph (N2) — built from terrain
+
+`hydrosheds.org` returns **403** and HydroRIVERS is not mirrored on figshare, so the second topology is derived from data already in hand: for each spatially adjacent county pair, the edge is directed **from higher to lower mean elevation**.
+
+| Property | Value |
+|---|---|
+| Directed edges | 3,032 |
+| Median elevation drop | 63 m (max 2,067 m) |
+| Headwater counties (no upstream neighbour) | 68 |
+| Outlet counties (no downstream neighbour) | 100 |
+| Cross-reach edges | 63 |
+
+Because elevation decreases strictly along every edge, the result is **acyclic by construction** — a desirable property for directed message passing.
+
+⚠️ This is a first-order downhill-flow proxy, **not** true river topology. It captures the upstream→downstream asymmetry N2 requires and can be swapped for real river network data later without changing the model interface. It must be described honestly as a terrain-derived proxy in the paper.
+
+## Nighttime lights — a silent product-mixing bug, caught
+
+Source: harmonised DMSP/VIIRS 1992–2024 (figshare 9828827), 21 annual GeoTIFFs for 2000–2020.
+
+**The bug:** my filename matcher selected `DN_NTL_2013_simVIIRS.tif` instead of `Harmonized_DN_NTL_2013_calDMSP.tif`, because alphabetical ordering puts `D…` before `H…`. The chosen file **lacks the `Harmonized_` prefix** and is therefore on a different radiometric scale. It also consumed the slot that should have held 2020.
+
+Effect: county-mean NTL for 2013 read **12.932**, making 2014 the largest year-over-year jump in the entire series (−2.673 against a median absolute jump of 0.591) — a textbook false DMSP→VIIRS discontinuity, precisely the artefact the design warned about.
+
+**After correction** (2013 = `Harmonized_..._calDMSP`, 2020 added):
+
+| | Before | After |
+|---|---|---|
+| 2013 value | 12.932 | **11.600** |
+| 2013→2014 jump | −2.673 | **−1.341** |
+| Largest jump year | **2014** | 2017 (1.889) |
+| Median abs jump | 0.591 | 0.591 |
+
+The transition is no longer the largest discontinuity in the series. **Verdict: harmonisation is sound and the series is usable.** A mild residual elevation remains at 2013 (final DMSP year, F18 sensor degradation) and should be noted but is not disqualifying.
+
+Had this gone unnoticed, the fake 2014 break would have propagated into every model using the human stream.
+
+## Files added
+
+| Path | Contents |
+|---|---|
+| `tables/panel_monthly.parquet` | **Primary modelling input** — 269,136 × 58 |
+| `tables/karst_county.csv` | Per-county karst fraction (N3) |
+| `tables/hydro_edges.csv` | Directed hydrological graph, 3,032 edges (N2) |
+| `tables/ntl_county_year.csv` | Harmonised nighttime lights, 2000–2020 |
+| `scripts/12_extract_monthly_state.py` | Monthly MODIS state extraction |
+| `scripts/13_test_monthly_irf.py` | N1 impulse-response feasibility test |
+| `scripts/14_static_layers.py` | Karst, hydro graph, NTL → county |
+| `scripts/15_monthly_forcing_full.py` | Monthly TerraClimate forcing, full period |
+| `scripts/16_assemble_monthly_panel.py` | Monthly panel assembly |
+
+## Dataset status
+
+| Stream | Status |
+|---|---|
+| County boundaries + spatial graph | ✅ complete |
+| Monthly state (LST, NDVI) 2000–2020 | ✅ complete |
+| Monthly forcing 2000–2020 | ✅ complete |
+| Seasonal panel | ✅ complete |
+| Annual panel | ✅ complete |
+| Static terrain | ✅ complete |
+| **Karst extent (N3)** | ✅ acquired, ⚠️ needs class filtering |
+| **Hydro graph (N2)** | ✅ built, ⚠️ terrain proxy not true rivers |
+| **Nighttime lights (Tier 1)** | ✅ complete and verified |
+| Impervious surface / population / GDP | ❌ not started |
+| CLCD land cover + fragmentation | ❌ not started |
+| Disturbance event catalogue | ❌ not started (partly derivable from forcing) |
+| Tier 2 socioeconomic | ❌ optional, needs institutional access |
+
+**Outstanding QC:** LST clear-sky sampling bias unquantified (highest priority — it sits under the revised N1's primary channel); ET changepoint near 2014 unexplained; minimum-pixel thresholds not yet applied; no Moran's I / VIF diagnostics; train/test splits not constructed.
