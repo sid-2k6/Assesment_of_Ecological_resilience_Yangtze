@@ -223,3 +223,123 @@ Per-year indicator CSVs (`data/interim/indicators/`, 9.1 MB) are reproducible fr
 4. Karst extent + hydrological network (`hydrosheds.org` returns 403 — needs another host).
 5. Socioeconomic panel from county yearbooks.
 6. Changepoint test on the ET series — the +5.35 mm/yr trend has a step-like character near 2014 that survived deduplication and needs explaining before use.
+
+
+---
+
+# Phase 3c — Seasonal RS compositing + climate forcing stream (PERSIST N1, N5)
+
+## The seasonal panel
+
+**89,712 rows × 59 columns — 1,068 counties × 21 years × 4 seasons.** A 4× increase in temporal samples over the annual panel, which also materially relieves the sample-size risk flagged in the PERSIST design (§7): 22,428 → 89,712.
+
+Seasons use the standard climatological convention where December belongs to the **following** year's winter: `DJF(Y) = Dec(Y-1), Jan(Y), Feb(Y)`. The search window per target year is therefore `(Y-1)-12-01 .. Y-11-30`.
+
+| Stream | Variables | Source |
+|---|---|---|
+| **State** (seasonal) | kNDVI, NDVI, EVI, LST day/night/range — mean, std, max, n | MODIS 13Q1, 11A2 |
+| **Forcing** (seasonal) | ppt, pet, aet, def, q *(season sums)*; tmax, tmin, vpd, soil, srad, **pdsi** *(season means)* | TerraClimate |
+| **Derived forcing** | `*_z` anomalies vs county×season climatology, `wbal = ppt−pet`, `spei_like`, `dry_z`, `heat_z` | computed |
+
+Seasonality validates cleanly: NDVI runs **DJF 0.376 < MAM 0.449 < SON 0.471 < JJA 0.597**, and precipitation **JJA 527 mm >> MAM 308 > SON 238 > DJF 112** — the East Asian monsoon. Annual precipitation by reach is midstream 1,372 mm > downstream 1,161 > upstream 1,068, correctly placing the Poyang/Dongting lake region as wettest.
+
+## Forcing stream independently identifies known disturbances
+
+This is what N1 requires, and it works:
+
+| Year | Event | dry_z | heat_z | PDSI |
+|---|---|---|---|---|
+| 2006 | Chongqing/Sichuan drought | +0.19 | +0.54 | **−1.93** |
+| 2011 | Yangtze drought | **+0.61** | −0.25 | **−2.76** |
+| 2013 | Record heatwave | +0.34 | +0.59 | −1.79 |
+| 2020 | Floods | −0.11 | +0.54 | −1.58 |
+
+**Spatial targeting is exact.** For JJA 2006 the highest `dry_z` values are **Chongqing 2.18 and Sichuan 2.06** — precisely the provinces hit by the catastrophic 2006 drought, Chongqing's worst in a century. For JJA 2013 `heat_z` reaches **1.89 downstream / 1.68 midstream / 1.70 upstream**, matching a middle-lower-Yangtze-centred heatwave.
+
+Critically, this **closes the loop on finding F2**: annual kNDVI showed *+0.61* in 2013 (no drought signal at all), while the seasonal forcing stream shows heat_z ≈ +1.7 to +1.9. The forcing stream sees the disturbance the annual state stream missed — exactly the two-stream separation N1 depends on.
+
+## N1 feasibility test — mixed result, honestly reported
+
+The cheapest possible check before implementing N1: **does forcing actually explain state anomalies?**
+
+| Forcing → State | r (JJA) | r (all) |
+|---|---|---|
+| heat_z → LST day | **+0.524** | **+0.577** |
+| dry_z → LST day | +0.323 | +0.365 |
+| dry_z → kNDVI | +0.205 | +0.083 |
+| heat_z → kNDVI | +0.191 | +0.197 |
+| pdsi → kNDVI | +0.024 | +0.098 |
+| soil_z → kNDVI | −0.091 | +0.026 |
+
+Within-county (county-demeaned) correlations are essentially identical, so these are not cross-sectional artefacts.
+
+**Verdict: the thermal channel is strongly identifiable (r ≈ 0.52); the vegetation channel is weak (r ≈ 0.19–0.21).**
+
+### Two problems this exposed
+
+**Problem A — the drought→vegetation sign is inverted.** `dry_z → kNDVI = +0.205` means *drier → greener*, which looks ecologically backwards until the supporting correlations are checked:
+
+| | r with kNDVI anomaly (JJA) |
+|---|---|
+| precipitation | **−0.145** |
+| solar radiation | **+0.145** |
+| dry_z | +0.205 |
+| soil moisture | −0.012 |
+
+More rain → less green; more radiation → more green; soil moisture irrelevant. **YREB summer vegetation is light-limited, not water-limited** — expected in a humid monsoon basin receiving 1,000–1,400 mm, and partly reinforced by MODIS cloud contamination during rainy periods.
+
+**Consequence for PERSIST: drought is the wrong primary disturbance axis for vegetation in this basin.** N1's forcing definition must shift toward extreme heat, flooding/waterlogging, and cold/frost events rather than moisture deficit. The thermal coupling (r = 0.52) is where the identifiable signal lives.
+
+**Problem B — anomaly persistence is near zero, threatening N1's recovery term.**
+
+| Series | corr(JJA, SON) |
+|---|---|
+| **raw** kNDVI | +0.462 |
+| **z-scored** kNDVI | **+0.020** |
+| **raw** LST day | +0.774 |
+| **z-scored** LST day | +0.133 |
+
+Year-over-year, same season: kNDVI `corr(t, t−1) = −0.015`, LST `+0.090`.
+
+Raw series persist strongly, but that persistence is **cross-sectional** (green counties stay green). Once county×season means are removed, residual interannual anomalies carry almost no seasonal carry-over. Physically: humid subtropical vegetation recovers within weeks, so at seasonal resolution recovery is already complete before the next observation.
+
+**Consequence: N1's recovery term is probably not identifiable at seasonal resolution.** Options in order of preference:
+1. Move to **monthly or native 16-day** resolution for the response channel — recovery happens *inside* a season
+2. Use **LST as the primary response channel**, where coupling and persistence are both far stronger
+3. Estimate recovery on **physically integrated** annual variables (NPP, ET) rather than instantaneous greenness
+
+This is precisely what the feasibility test was for. Discovering it now cost one script; discovering it after implementing N1 would have cost the phase.
+
+## Bug fixed — sub-cell counties silently dropped
+
+The first climate run returned 1,042 of 1,068 counties. `rasterize()` assigns each cell to exactly **one** polygon, so a small county sharing a TerraClimate cell (~4.6 km, ~21 km²) with a larger neighbour is overwritten and receives zero cells — even with `all_touched=True`.
+
+All 26 casualties were tiny urban districts: median **62 km²** against an overall median of 1,586 km² (黄浦区 20 km², 虹口区 23 km², 渝中区 24 km², 江汉区 29 km²…).
+
+**These are the same dense urban cores that already lose MOD16 ET.** Urban-core counties are therefore losing data across *multiple independent products*, extending finding F3: dropping them would systematically remove the most-developed downstream units and bias the east–west comparison the study exists to test.
+
+Fixed with a **centroid-fallback estimator** — sample the nearest grid cell at the county centroid. Climate fields are spatially smooth at 4.6 km, so this is adequate for a 20 km² district. Fallback rows are flagged `n_cells = 0.5` so they remain filterable.
+
+## Also fixed — TerraClimate Zarr access
+
+The STAC `zarr-https` asset carries its SAS token as a query string, and fsspec appends `/zarr.json` *after* the query, producing a malformed URL and a 403. The `zarr-abfs` asset passes credentials via `storage_options` and works. Separately, `xr.open_zarr()` rejects the `engine` kwarg that STAC advertises — route through `xr.open_dataset()`.
+
+## Files added
+
+| Path | Contents |
+|---|---|
+| `tables/panel_seasonal.parquet` | **Main deliverable** — 89,712 × 59 seasonal panel (state + forcing) |
+| `tables/climate_forcing_seasonal.parquet` | 89,712 × 30 forcing stream alone |
+| `scripts/09_extract_seasonal_rs.py` | Seasonal MODIS compositing |
+| `scripts/10_extract_climate_forcing.py` | TerraClimate → seasonal county forcing |
+| `scripts/11_assemble_seasonal_panel.py` | Panel assembly + N1 feasibility test |
+
+Stored as Parquet with float32 downcasting: 83 MB CSV → **22.5 MB Parquet**. Per-year seasonal CSVs (25 MB) are reproducible and not committed.
+
+## Impact on the PERSIST design
+
+| Novelty | Status |
+|---|---|
+| **N5** hierarchical seasonal encoder | ✅ **Data ready.** Justification now doubly confirmed. |
+| **N1** disturbance-response decoder | ⚠️ **Needs revision.** Forcing stream built and validated, but the disturbance axis must shift from drought to thermal/flood, and the recovery term needs sub-seasonal resolution. |
+| N2, N3, N4, N6 | Unaffected; still awaiting river network, karst extent, CLCD. |
