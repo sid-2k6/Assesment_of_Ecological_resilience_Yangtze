@@ -454,3 +454,67 @@ Had this gone unnoticed, the fake 2014 break would have propagated into every mo
 | Tier 2 socioeconomic | ❌ optional, needs institutional access |
 
 **Outstanding QC:** LST clear-sky sampling bias unquantified (highest priority — it sits under the revised N1's primary channel); ET changepoint near 2014 unexplained; minimum-pixel thresholds not yet applied; no Moran's I / VIF diagnostics; train/test splits not constructed.
+
+---
+
+# Phase 3e — QC: LST clear-sky sampling bias
+
+LST is N1's primary response channel and MOD11A2 retrieves it **only under clear sky**. The specific confound to rule out was:
+
+> drought → clear skies → MORE observations AND higher measured LST
+
+If that drove the observed `dry_z → LST` coupling, N1's "response" would be a sampling artefact rather than a land-surface process.
+
+## Test 1 — clear-sky sampling is confirmed, but modest
+
+| | r with relative sampling density |
+|---|---|
+| precipitation | **−0.178** |
+| solar radiation | **+0.264** |
+| VPD | +0.236 |
+
+Sampling density is genuinely driven by cloudiness. Zero-observation county-months are only 0.48 %.
+
+## Test 2 — there IS leakage into the anomaly
+
+`corr(n_rel, lst_c_z) = +0.204`. Sparse months read cooler, dense months warmer:
+
+| Sampling quintile | LST anomaly | precipitation (mm) |
+|---|---|---|
+| Q1 sparse | **−0.316** | 128.6 |
+| Q2 | −0.048 | 106.5 |
+| Q3 | +0.032 | 96.4 |
+| Q4 | +0.101 | 78.0 |
+| Q5 dense | **+0.224** | 84.7 |
+
+A monotonic 0.54 σ spread across quintiles, with precipitation falling across them — the mechanism is exactly as hypothesised.
+
+## Test 3 — the coupling survives the control
+
+| | raw r | partial r (controlling n_rel) | attenuation |
+|---|---|---|---|
+| all months | +0.358 | +0.322 | 10.0 % |
+| JJA only | +0.360 | +0.311 | **13.8 %** |
+
+**~86 % of the `dry_z → LST` coupling is not explained by sampling.** The land-surface response is real.
+
+## Test 4 — filtering to well-sampled months *improves* the signal
+
+| Subset | t+0 | t+1 | t+2 | decay t+1/t0 |
+|---|---|---|---|---|
+| all months | +1.004 | +0.135 | +0.199 | 0.135 |
+| **n_rel ≥ 0.9** | +1.064 | **+0.454** | +0.216 | **0.427** |
+
+Restricting to well-sampled months **strengthens** the decay (0.135 → 0.427) while retaining 3,527 of 4,237 shocks (83 %). The sparse months were adding noise, not manufacturing the signal.
+
+## Verdict: MODERATE bias — N1 does not need redesigning
+
+The bias is real but bounded, and the mitigation is simple and beneficial:
+
+1. **Include `n_rel` as a model covariate** so residual sampling effects are absorbed rather than attributed to forcing.
+2. **Restrict event-conditioned recovery estimation to `n_rel ≥ 0.9`** — improves the decay signal and costs only 17 % of shock events.
+3. **Report the sensitivity** (raw vs partial correlation, and both decay profiles) in the paper.
+
+⚠️ One honest caveat: the decay profile is non-monotonic at t+3 (+0.339 > t+2 +0.216) over the full 21 years, whereas the 2010–2014 pilot gave a clean monotonic decay. The recovery term is identifiable but noisier at full-period scale than the pilot suggested, and per-county estimates will need regularisation.
+
+`*_n` columns are retained throughout the panel to support this filtering.
