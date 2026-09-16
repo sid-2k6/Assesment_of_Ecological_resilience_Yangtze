@@ -63,3 +63,7 @@ Thumbs.db
 *.swp
 ~$*.docx
 ~$*.xlsx
+
+# Generated model outputs (written to Drive at runtime; can be force-added if needed)
+outputs/
+smoke_outputs/
