@@ -112,3 +112,66 @@ Two bugs were found and fixed during smoke testing:
 No tree-ensemble baseline is included, per the deep-learning-only constraint. This is defensible because the monthly panel has **269,136 observations**, where deep learning is genuinely appropriate — the earlier sample-size concern applied to the 22,428-row annual panel.
 
 If a reviewer asks for a classical comparator, the cheapest response is a single XGBoost reference row appended to `baseline_comparison.csv` rather than a restructure.
+
+
+---
+
+# Revision 1 — fixing the negative-R² result
+
+The first full run returned **negative R² and near-zero Pearson r for all three models**. Diagnosis: the fault was the **target definition**, not the code. Three unrelated architectures failing identically points at the data, not the models.
+
+## What was wrong
+
+| Problem | Evidence | Fix |
+|---|---|---|
+| **Per-county-month standardisation divided by near-zero standard deviations** | `kndvi_z` max reached **60.955** — a 61-sigma value. A handful of these dominated every squared-error metric. | Primary target now uses a **single global scale**, which cannot explode. Strict target has county sds **floored** at 10 % of the global sd and values **clipped at ±5σ**. |
+| **County-demeaning removed nearly all predictable signal** | Measured monthly lag-1 autocorrelation is only **0.155** (LST) / **0.209** (kNDVI), capping achievable R² at ≈0.03. The variance decomposition confirms `lst_z` is **0.0 % between-county / 100 % within-county** — pure hard temporal noise. | Primary target is now **deseasonalised state**: the regional month climatology is removed (so the trivial seasonal cycle can't be exploited) but county structure is **retained**. `lst_ds` splits 41 % between / 59 % within. |
+| **No floor** — a negative R² was uninterpretable | Nothing to compare against | **Four trivial baselines** added |
+| **Train/test distribution shift** | Test-period target variance ≈2× train, from warming (+0.032 °C/yr) and greening (+0.00206/yr) trends. Produced the structural −0.42 to −0.53 bias. | `year_frac` trend feature added |
+| **No way to separate spatial from temporal skill** | — | **Variance decomposition** + **within-county R²** now reported |
+
+## Trivial reference baselines — the floor
+
+| Reference | Prediction |
+|---|---|
+| **Climatology** | 0 — the regional month normal |
+| **County climatology** | the county's own train-period mean offset |
+| **Persistence** | last month's value |
+| **Seasonal naive** | the same month one year earlier |
+
+Written into `baseline_comparison.csv` tagged `type = trivial`, and drawn as a red dashed reference line on the RMSE comparison plots.
+
+## Metrics now reported in three spaces
+
+A model trained on the primary target is scored in all three via an **exact affine back-transform**, so no retraining is needed:
+
+- **Primary** (`*_ds`) — deseasonalised, what the model optimises
+- **Raw** (`raw_lst_c_*`) — original physical units
+- **Strict** (`strict_lst_z_*`) — county-demeaned interannual anomaly, the hard view
+
+Plus two new diagnostics:
+
+- **`within_county_R2`** — R² after removing each county's mean. Reveals whether a model has learned any **temporal** signal or is merely ranking counties.
+- **Variance decomposition** — between- vs within-county share of target variance, printed for every target.
+
+## Result of the fix (smoke test: 60 counties, 2 epochs)
+
+| Model | RMSE | R² | Pearson r | within-county R² |
+|---|---|---|---|---|
+| Climatology | 1.0200 | −0.147 | — | −0.000 |
+| CountyClimatology | 0.7839 | +0.323 | 0.689 | −0.000 |
+| **Persistence** | **0.7439** | **+0.390** | 0.694 | −0.552 |
+| **SeasonalNaive** | **0.6168** | **+0.580** | 0.788 | −0.235 |
+| DRSEI | 0.8290 | +0.242 | 0.652 | +0.004 |
+| STGCN | 0.9287 | +0.049 | 0.592 | −0.005 |
+| TFT | 0.6950 | +0.467 | 0.719 | −0.004 |
+
+**R² is positive and Pearson r is 0.59–0.72**, versus negative R² and r ≈ 0 before. The metrics are now interpretable.
+
+## Two honest caveats the fix exposed
+
+**1. SeasonalNaive is the real bar, not Persistence.** At smoke-test scale, "same month last year" (RMSE 0.617) beats every deep model including TFT (0.695). The verdict line in the notebook checks against Persistence, which TFT clears by 6.6 % — but **SeasonalNaive is the stronger reference and should be the headline comparison.** A deep model that cannot beat a one-line seasonal lookup is not earning its complexity.
+
+**2. `within_county_R2` ≈ 0 for all deep models.** Their positive R² comes almost entirely from the **between-county** component — i.e. from learning which counties are warm or green, not from predicting temporal dynamics. Since `lst_ds` is 41 % between-county variance, that spatial component is legitimately part of the target, but it must be reported honestly rather than presented as forecasting skill.
+
+These are 60-county, 2-epoch numbers and should improve substantially at full scale (1,068 counties, 60 epochs). But both diagnostics will remain the honest tests, and **PERSIST must beat SeasonalNaive and show non-trivial within-county R²** to justify itself.
